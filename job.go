@@ -28,10 +28,10 @@ type Job struct {
 	TimeRange TimeRange
 }
 
-// Task handles a period time of a ticket
+// Task handles a ticket
 type Task interface {
 	// Run the entrance of task
-	Run(ctx context.Context, ticket Ticket, params []Param, start, unit int64) error
+	Run(ctx context.Context, ticket Ticket, params []Param, start int64) error
 }
 
 // Run the job entrance
@@ -80,7 +80,7 @@ func (j Job) run() error {
 			// run the task
 			ctx := context.WithValue(context.Background(), JobCtx, j)
 			ctx = context.WithValue(ctx, TaskUIDCtx, fmt.Sprintf("%s:%s", ticket, timeFormat(start)))
-			if err := j.Task.Run(ctx, ticket, params, start, j.TimeRange.unit); err != nil {
+			if err := j.Task.Run(ctx, ticket, params, start); err != nil {
 				return err
 			}
 		}
