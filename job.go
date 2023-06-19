@@ -9,13 +9,13 @@ import (
 
 type (
 	Ticket string
-	Pvd    string
+	Param  any
 )
 
 // Job runs a batch of task in the bucket.
 type Job struct {
-	// Bucket there are tasks in the bucket; Pvd is the data source of the task.
-	Bucket map[Ticket][]Pvd
+	// Bucket there are tasks in the bucket; Param is the param of the task.
+	Bucket map[Ticket][]Param
 	// Mode a job can have many modes.
 	Mode Mode
 	// Task runs a ticket fetching from the bucket.
@@ -31,7 +31,7 @@ type Job struct {
 // Task handles a period time of a ticket
 type Task interface {
 	// Run the entrance of task
-	Run(ctx context.Context, ticket Ticket, pvds []Pvd, start, unit int64) error
+	Run(ctx context.Context, ticket Ticket, params []Param, start, unit int64) error
 }
 
 // Run the job entrance
@@ -67,7 +67,7 @@ const (
 
 func (j Job) run() error {
 	lg := log.WithField("func", "Job.run")
-	for ticket, pvds := range j.Bucket {
+	for ticket, params := range j.Bucket {
 		for {
 			start, end, err := j.TimeRange.Race(ticket)
 			if err != nil {
@@ -80,7 +80,7 @@ func (j Job) run() error {
 			// run the task
 			ctx := context.WithValue(context.Background(), JobCtx, j)
 			ctx = context.WithValue(ctx, TaskUIDCtx, fmt.Sprintf("%s:%s", ticket, timeFormat(start)))
-			if err := j.Task.Run(ctx, ticket, pvds, start, j.TimeRange.unit); err != nil {
+			if err := j.Task.Run(ctx, ticket, params, start, j.TimeRange.unit); err != nil {
 				return err
 			}
 		}

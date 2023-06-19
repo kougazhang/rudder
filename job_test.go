@@ -9,7 +9,7 @@ import (
 
 type task struct{}
 
-func (t task) Run(ctx context.Context, domain Ticket, pvds []Pvd, start, unit int64) error {
+func (t task) Run(ctx context.Context, domain Ticket, pvds []Param, start, unit int64) error {
 	taskUID, ok := ctx.Value(TaskUIDCtx).(string)
 	if !ok {
 		log.Fatal("taskUID is invalid")
@@ -30,7 +30,7 @@ func TestJob_Run(t *testing.T) {
 		log.Fatal(err)
 	}
 	job := Job{
-		Bucket: map[Ticket][]Pvd{
+		Bucket: map[Ticket][]Param{
 			domain: nil,
 		},
 		Task:      task{},
