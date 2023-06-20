@@ -21,7 +21,7 @@ type Job struct {
 	// Task runs a ticket fetching from the bucket.
 	Task Task
 	// BeforeRun runs a list of functions before the job
-	BeforeRun []func() error
+	BeforeRun []func(ctx context.Context) error
 	// Interval must be configured if cronMode is open
 	Interval time.Duration
 	// TimeRange is a range of time about a task
@@ -37,10 +37,11 @@ type Task interface {
 // Run the job entrance
 func (j Job) Run() error {
 	lg := log.WithField("func", "Job.Run")
+	ctx := context.Background()
 	// before run
 	if j.BeforeRun != nil {
 		for _, fn := range j.BeforeRun {
-			if err := fn(); err != nil {
+			if err := fn(ctx); err != nil {
 				return err
 			}
 		}
@@ -48,7 +49,7 @@ func (j Job) Run() error {
 	// run
 	for {
 		var err error
-		if err = j.run(); err != nil {
+		if err = j.run(ctx); err != nil {
 			lg.Errorf("%v", err)
 		}
 		if j.Mode.HasMode(CronMode) {
@@ -65,7 +66,7 @@ const (
 	TaskUIDCtx = "taskUID"
 )
 
-func (j Job) run() error {
+func (j Job) run(ctx context.Context) error {
 	lg := log.WithField("func", "Job.run")
 	for ticket, params := range j.Bucket {
 		for {
@@ -78,7 +79,7 @@ func (j Job) run() error {
 				return nil
 			}
 			// run the task
-			ctx := context.WithValue(context.Background(), JobCtx, j)
+			ctx = context.WithValue(ctx, JobCtx, j)
 			ctx = context.WithValue(ctx, TaskUIDCtx, fmt.Sprintf("%s:%s", ticket, timeFormat(start)))
 			if err := j.Task.Run(ctx, ticket, params, start); err != nil {
 				return err
