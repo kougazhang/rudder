@@ -22,6 +22,10 @@ type Job struct {
 	Task Task
 	// BeforeRun runs a list of functions before the job
 	BeforeRun []func(ctx context.Context) error
+	// BeforeTaskRun runs a list of functions before per task
+	BeforeTaskRun []func(ctx context.Context) error
+	// AfterTaskRun runs a list of functions after per task
+	AfterTaskRun []func(ctx context.Context) error
 	// Interval must be configured if cronMode is open
 	Interval time.Duration
 	// TimeRange is a range of time about a task
@@ -78,11 +82,23 @@ func (j Job) run(ctx context.Context) error {
 				lg.Infof("start %s is equal or after end %s, stop to run", timeFormat(start), timeFormat(end))
 				return nil
 			}
-			// run the task
 			ctx = context.WithValue(ctx, JobCtx, j)
 			ctx = context.WithValue(ctx, TaskUIDCtx, fmt.Sprintf("%s:%s", ticket, timeFormat(start)))
+			// before task
+			for _, fn := range j.BeforeTaskRun {
+				if err := fn(ctx); err != nil {
+					return err
+				}
+			}
+			// run the task
 			if err := j.Task.Run(ctx, ticket, params, start); err != nil {
 				return err
+			}
+			// after task
+			for _, fn := range j.AfterTaskRun {
+				if err := fn(ctx); err != nil {
+					return err
+				}
 			}
 		}
 	}
