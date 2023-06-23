@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	github.com/kougazhang/redis v0.0.1 // indirect
 	github.com/onsi/ginkgo v1.16.5 // indirect
 	github.com/onsi/gomega v1.27.8 // indirect
 	golang.org/x/sys v0.8.0 // indirect

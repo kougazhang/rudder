@@ -4,13 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"github.com/go-redis/redis"
+	iredis "github.com/kougazhang/redis"
 	log "github.com/sirupsen/logrus"
 	"net"
 	"time"
 )
 
 type TimRangeConfig struct {
-	RedisAddr                    RedisAddr
+	RedisAddr                    iredis.Addr
 	Unit, StartOffset, EndOffset string
 }
 
@@ -43,16 +44,18 @@ func NewTimeRange(cfg *TimRangeConfig) (trange TimeRange, err error) {
 
 // TimeRange the range time of the task
 type TimeRange struct {
-	addr                         RedisAddr
+	addr                         iredis.Addr
 	unit, startOffset, endOffset int64
 }
 
 func (t TimeRange) Race(ticket Ticket) (start, end int64, err error) {
-	rds, err := t.addr.newClient()
+	rds, err := t.addr.NewClient()
 	if err != nil {
 		return
 	}
-	defer rds.Close()
+	defer func() {
+		_ = rds.Close()
+	}()
 
 	// assign the start
 	start, err = t.incrby(t.startKey(ticket), t.unit)
@@ -76,11 +79,13 @@ func (t TimeRange) Race(ticket Ticket) (start, end int64, err error) {
 }
 
 func (t TimeRange) cleanRedis(ticket Ticket) error {
-	rds, err := t.addr.newClient()
+	rds, err := t.addr.NewClient()
 	if err != nil {
 		return err
 	}
-	defer rds.Close()
+	defer func() {
+		_ = rds.Close()
+	}()
 
 	keys := []string{
 		t.startKey(ticket),
@@ -119,11 +124,13 @@ func (t TimeRange) offsetNow(offset int64) (int64, error) {
 
 func (t TimeRange) lock(flag string) error {
 	key := t.lockKey(flag)
-	rds, err := t.addr.newClient()
+	rds, err := t.addr.NewClient()
 	if err != nil {
 		return err
 	}
-	defer rds.Close()
+	defer func() {
+		_ = rds.Close()
+	}()
 
 	var maxErr int
 	for maxErr < 10 {
@@ -145,21 +152,25 @@ func (t TimeRange) lock(flag string) error {
 
 func (t TimeRange) unlock(flag string) error {
 	key := flag + ":locker"
-	rds, err := t.addr.newClient()
+	rds, err := t.addr.NewClient()
 	if err != nil {
 		return err
 	}
-	defer rds.Close()
+	defer func() {
+		_ = rds.Close()
+	}()
 	_, err = rds.Del(key).Result()
 	return err
 }
 
 func (t TimeRange) get(key string) (int64, error) {
-	rds, err := t.addr.newClient()
+	rds, err := t.addr.NewClient()
 	if err != nil {
 		return 0, err
 	}
-	defer rds.Close()
+	defer func() {
+		_ = rds.Close()
+	}()
 	return rds.Get(key).Int64()
 }
 
@@ -173,11 +184,13 @@ func (t TimeRange) incrby(key string, increment int64) (int64, error) {
 			lg.Errorf("%v", err)
 		}
 	}()
-	rds, err := t.addr.newClient()
+	rds, err := t.addr.NewClient()
 	if err != nil {
 		return 0, err
 	}
-	defer rds.Close()
+	defer func() {
+		_ = rds.Close()
+	}()
 
 	start, err := rds.Get(key).Int64()
 	if errors.Is(err, redis.Nil) {
