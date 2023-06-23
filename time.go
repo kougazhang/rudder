@@ -10,8 +10,13 @@ import (
 	"time"
 )
 
+// TimRangeConfig communicates task progress for difference processes
 type TimRangeConfig struct {
-	RedisAddr                    iredis.Addr
+	// RedisAddr is used for communicating progress for difference processes
+	RedisAddr iredis.Addr
+	// Unit the time of start goes foreword a unit
+	// StartOffset time.Now() add startOffset if start was not found in redis
+	// EndOffset time.Now() add EndOffset if start was not found in redis
 	Unit, StartOffset, EndOffset string
 }
 
@@ -75,6 +80,28 @@ func (t TimeRange) Race(ticket Ticket) (start, end int64, err error) {
 	if end, err = t.offsetNow(t.endOffset); err != nil {
 		return
 	}
+	return
+}
+
+// SetStart sets start to redis
+func (t TimeRange) SetStart(ticket Ticket, start time.Time) (err error) {
+	return t.set(t.startKey(ticket), start)
+}
+
+// SetEnd sets end to redis
+func (t TimeRange) SetEnd(ticket Ticket, end time.Time) (err error) {
+	return t.set(t.endKey(ticket), end)
+}
+
+func (t TimeRange) set(key string, tm time.Time) (err error) {
+	rds, err := t.addr.NewClient()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = rds.Close()
+	}()
+	_, err = rds.Set(key, tm.Unix(), time.Hour*24).Result()
 	return
 }
 
