@@ -39,6 +39,7 @@ type Task interface {
 }
 
 // Run the job entrance
+// notice: the race will increase the start even though the task was finished.
 func (j Job) Run() error {
 	lg := log.WithField("func", "Job.Run")
 	ctx := context.Background()

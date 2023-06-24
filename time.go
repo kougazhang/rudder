@@ -69,7 +69,12 @@ func (t TimeRange) Race(ticket Ticket) (start, end int64, err error) {
 	}
 	// assign the end
 	// 1st query the end from redis
-	if end, err = t.get(t.endKey(ticket)); err != nil && !errors.Is(err, redis.Nil) {
+	end, err = t.get(t.endKey(ticket))
+	if err == nil {
+		return
+	}
+	if !errors.Is(err, redis.Nil) {
+		log.Debugf("the end key of job %s", t.endKey(ticket))
 		return
 	}
 	// 2nd calculate the end by now
@@ -178,7 +183,7 @@ func (t TimeRange) lock(flag string) error {
 }
 
 func (t TimeRange) unlock(flag string) error {
-	key := flag + ":locker"
+	key := t.lockKey(flag)
 	rds, err := t.addr.NewClient()
 	if err != nil {
 		return err
