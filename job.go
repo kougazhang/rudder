@@ -25,6 +25,8 @@ type Job struct {
 	// BeforeTaskRun runs a list of functions before per task
 	BeforeTaskRun []func(ctx context.Context) error
 	// AfterTaskRun runs a list of functions after per task
+	// The lifetime of Task is as long as the job,
+	// so it's necessary to clean to avoid leaked some variables specially in the cron mode.
 	AfterTaskRun []func(ctx context.Context) error
 	// Interval must be configured if cronMode is open
 	Interval time.Duration
