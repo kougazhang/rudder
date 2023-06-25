@@ -26,7 +26,7 @@ func TestJob_Run(t *testing.T) {
 		endOffset:   3600,
 	}
 	var domain Ticket = "www.baidu.com"
-	if err := trange.cleanRedis(domain); err != nil {
+	if err := trange.CleanRedis(domain); err != nil {
 		log.Fatal(err)
 	}
 	job := Job{

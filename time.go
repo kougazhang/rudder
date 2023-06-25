@@ -110,7 +110,7 @@ func (t TimeRange) set(key string, tm time.Time) (err error) {
 	return
 }
 
-func (t TimeRange) cleanRedis(ticket Ticket) error {
+func (t TimeRange) CleanRedis(ticket Ticket) error {
 	rds, err := t.addr.NewClient()
 	if err != nil {
 		return err
