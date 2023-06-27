@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/go-redis/redis"
 	iredis "github.com/kougazhang/redis"
+	itime "github.com/kougazhang/time"
 	log "github.com/sirupsen/logrus"
 	"net"
 	"time"
@@ -15,42 +16,90 @@ type TimRangeConfig struct {
 	// RedisAddr is used for communicating progress for difference processes
 	RedisAddr iredis.Addr
 	// Unit the time of start goes foreword a unit
-	// StartOffset time.Now() add startOffset if start was not found in redis
-	// EndOffset time.Now() add EndOffset if start was not found in redis
-	Unit, StartOffset, EndOffset string
+	Unit string
+	// Dynamic is used of DynamicRace
+	Dynamic Dynamic
+}
+
+type Dynamic struct {
+	// Offset the raw of time.Duration
+	Offset string
 }
 
 func NewTimeRange(cfg *TimRangeConfig) (trange TimeRange, err error) {
 	trange.addr = cfg.RedisAddr
-
-	val, e := time.ParseDuration(cfg.Unit)
-	if e != nil {
-		err = e
+	trange.unit, err = itime.ParseDuration(cfg.Unit)
+	if err != nil {
 		return
 	}
-	trange.unit = int64(val.Seconds())
-
-	val, e = time.ParseDuration(cfg.StartOffset)
-	if e != nil {
-		err = e
-		return
-	}
-	trange.startOffset = int64(val.Seconds())
-
-	val, e = time.ParseDuration(cfg.EndOffset)
-	if e != nil {
-		err = e
-		return
-	}
-	trange.endOffset = int64(val.Seconds())
-
+	trange.dynamic.offset, err = itime.ParseDuration(cfg.Dynamic.Offset)
 	return
 }
 
 // TimeRange the range time of the task
 type TimeRange struct {
-	addr                         iredis.Addr
-	unit, startOffset, endOffset int64
+	addr    iredis.Addr
+	unit    time.Duration
+	dynamic dynamic
+}
+
+type dynamic struct {
+	offset time.Duration
+}
+
+// DynamicRace Checks the current time meets the offset of start or not
+// If true, ok is true
+// If not, ok is false
+// If the start didn't exist, calculate it by offset.
+func (t TimeRange) DynamicRace(ticket Ticket) (start int64, ok bool, err error) {
+	lg := log.WithField("func", "TimeRange.DynamicRace")
+	rds, err := t.addr.NewClient()
+	if err != nil {
+		return
+	}
+	defer func() {
+		_ = rds.Close()
+	}()
+
+	// lock
+	key := t.startKey(ticket)
+	lockKey := t.lockKey(key + ":dynamic")
+	if err = t.lock(lockKey); err != nil {
+		return
+	}
+	defer func() {
+		if err := t.unlock(key); err != nil {
+			lg.Errorf("%v", err)
+		}
+	}()
+
+	start, err = t.get(key)
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			// calculate it by offset
+			// lock then set it
+			return
+		}
+		return
+	}
+
+	// Checks the current time meets the offset of start or not
+	now, err := t.offsetNow()
+	if err != nil {
+		return 0, false, err
+	}
+	// if true, increase the start
+	if start <= now {
+		ok = true
+		// increase the start
+		start, err = t.incrby(t.startKey(ticket))
+		if err != nil {
+			return
+		}
+		return
+	}
+	// If not, ok is false
+	return
 }
 
 func (t TimeRange) Race(ticket Ticket) (start, end int64, err error) {
@@ -63,28 +112,14 @@ func (t TimeRange) Race(ticket Ticket) (start, end int64, err error) {
 	}()
 
 	// assign the start
-	start, err = t.incrby(t.startKey(ticket), t.unit)
+	start, err = t.incrby(t.startKey(ticket))
 	if err != nil {
 		return
 	}
 	// assign the end
 	// 1st query the end from redis
 	end, err = t.get(t.endKey(ticket))
-	if err == nil {
-		return
-	}
-	if !errors.Is(err, redis.Nil) {
-		log.Debugf("the end key of job %s", t.endKey(ticket))
-		return
-	}
-	// 2nd calculate the end by now
-	if t.endOffset == 0 {
-		err = fmt.Errorf("endOffset is 0")
-		return
-	}
-	if end, err = t.offsetNow(t.endOffset); err != nil {
-		return
-	}
+
 	return
 }
 
@@ -141,9 +176,10 @@ func (t TimeRange) endKey(ticket Ticket) string {
 	return string("rudder:" + ticket + ":end")
 }
 
-func (t TimeRange) offsetNow(offset int64) (int64, error) {
+func (t TimeRange) offsetNow() (int64, error) {
 	now := time.Now()
 	minute, second := now.Minute(), now.Second()
+	offset := int64(t.dynamic.offset.Seconds())
 	switch t.unit {
 	case 300:
 		return now.Unix()/300*300 - offset, nil
@@ -206,13 +242,16 @@ func (t TimeRange) get(key string) (int64, error) {
 	return rds.Get(key).Int64()
 }
 
-func (t TimeRange) incrby(key string, increment int64) (int64, error) {
+// incrby the key auto increases increment, and return the old value
+// if the key didn't exist, return redis.Nil error
+func (t TimeRange) incrby(key string) (old int64, err error) {
 	lg := log.WithField("func", "TimeRange.incrby")
-	if err := t.lock(key); err != nil {
+	lockKey := t.lockKey(key + ":incrby")
+	if err := t.lock(lockKey); err != nil {
 		return 0, err
 	}
 	defer func() {
-		if err := t.unlock(key); err != nil {
+		if err := t.unlock(lockKey); err != nil {
 			lg.Errorf("%v", err)
 		}
 	}()
@@ -224,20 +263,14 @@ func (t TimeRange) incrby(key string, increment int64) (int64, error) {
 		_ = rds.Close()
 	}()
 
-	start, err := rds.Get(key).Int64()
-	if errors.Is(err, redis.Nil) {
-		if t.startOffset == 0 {
-			return 0, err
-		}
-		if nstart, err := t.offsetNow(t.startOffset); err != nil {
-			return 0, err
-		} else {
-			start = nstart
-		}
+	old, err = rds.Get(key).Int64()
+	if err != nil {
+		return
 	}
 
-	_, err = rds.Set(key, start+increment, time.Hour*24).Result()
-	return start, err
+	increment := int64(t.unit.Seconds())
+	_, err = rds.Set(key, old+increment, time.Hour*24).Result()
+	return
 }
 
 func timeFormat(unix int64) string {

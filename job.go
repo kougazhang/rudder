@@ -2,6 +2,7 @@ package rudder
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"time"
@@ -32,6 +33,10 @@ type Job struct {
 	Interval time.Duration
 	// TimeRange is a range of time about a task
 	TimeRange TimeRange
+	// IsFixedTime the timeRange of the job is fixed or endless
+	// case 1: start and fix are fixed
+	// case 2: generate start and end dynamically by delay
+	IsFixedTime bool
 }
 
 // Task handles a ticket
@@ -73,17 +78,29 @@ const (
 	TaskUIDCtx = "taskUID"
 )
 
-func (j Job) run(ctx context.Context) error {
-	lg := log.WithField("func", "Job.run")
+func (j Job) run(ctx context.Context) (err error) {
+	lg := log.WithField("func", "Job.dynamicTimeRun")
+	var start int64
 	for ticket, params := range j.Bucket {
 		for {
-			start, end, err := j.TimeRange.Race(ticket)
-			if err != nil {
-				return err
-			}
-			if start >= end {
-				lg.Infof("start %s is equal or after end %s, stop to run", timeFormat(start), timeFormat(end))
-				return nil
+			if j.IsFixedTime {
+				start, err = j.fixedTimeStart(ticket)
+				if err != nil {
+					if err == completedErr {
+						lg.Infof("the job is completed, start %s, stop to run", timeFormat(start))
+						return nil
+					}
+					return err
+				}
+			} else {
+				start, err = j.dynamicTimeStart(ticket)
+				if err != nil {
+					if err == timeIsEarlyErr {
+						lg.Infof("the start %s is too early, continue to wait", timeFormat(start))
+						return nil
+					}
+					return err
+				}
 			}
 			ctx = context.WithValue(ctx, JobCtx, j)
 			ctx = context.WithValue(ctx, TaskUIDCtx, fmt.Sprintf("%s:%s", ticket, timeFormat(start)))
@@ -106,4 +123,35 @@ func (j Job) run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+var (
+	completedErr   = errors.New("reach the end")
+	timeIsEarlyErr = errors.New("the time is too early")
+)
+
+func (j Job) dynamicTimeStart(ticket Ticket) (start int64, err error) {
+	var ok bool
+	start, ok, err = j.TimeRange.DynamicRace(ticket)
+	if err != nil {
+		return
+	}
+	if !ok {
+		err = timeIsEarlyErr
+		return
+	}
+	return
+}
+
+func (j Job) fixedTimeStart(ticket Ticket) (start int64, err error) {
+	var end int64
+	start, end, err = j.TimeRange.Race(ticket)
+	if err != nil {
+		return
+	}
+	if start >= end {
+		err = completedErr
+		return
+	}
+	return
 }
