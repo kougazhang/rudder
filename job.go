@@ -59,13 +59,13 @@ func (j Job) Run() error {
 		}
 	}
 	// run
-	for {
+	for { // for cron
 		var err error
 		if err = j.run(ctx); err != nil {
 			lg.Errorf("%v", err)
 		}
 		if j.Mode.HasMode(CronMode) {
-			lg.Infof("run next task after %s", j.Interval)
+			lg.Infof("run the job after %s", j.Interval)
 			time.Sleep(j.Interval)
 		} else {
 			return err
@@ -78,51 +78,67 @@ const (
 	TaskUIDCtx = "taskUID"
 )
 
+// run prefers ticket than time first
 func (j Job) run(ctx context.Context) (err error) {
-	lg := log.WithField("func", "Job.dynamicTimeRun")
-	var start int64
+	lg := log.WithField("func", "Job.run")
 	for ticket, params := range j.Bucket {
-		for {
-			if j.IsFixedTime {
-				start, err = j.fixedTimeStart(ticket)
-				if err != nil {
-					if err == completedErr {
-						lg.Infof("the job is completed, start %s, stop to run", timeFormat(start))
-						return nil
-					}
-					return err
-				}
-			} else {
-				start, err = j.dynamicTimeStart(ticket)
-				if err != nil {
-					if err == timeIsEarlyErr {
-						lg.Infof("the start %s is too early, continue to wait", timeFormat(start))
-						return nil
-					}
-					return err
-				}
-			}
-			ctx = context.WithValue(ctx, JobCtx, j)
-			ctx = context.WithValue(ctx, TaskUIDCtx, fmt.Sprintf("%s:%s", ticket, timeFormat(start)))
-			// before task
-			for _, fn := range j.BeforeTaskRun {
-				if err := fn(ctx); err != nil {
-					return err
-				}
-			}
-			// run the task
-			if err := j.Task.Run(ctx, ticket, params, start); err != nil {
-				return err
-			}
-			// after task
-			for _, fn := range j.AfterTaskRun {
-				if err := fn(ctx); err != nil {
-					return err
-				}
-			}
+		if err = j.ticket(ctx, ticket, params); err != nil {
+			lg.Errorf("ticket:%v, err %v", ticket, err)
 		}
 	}
 	return nil
+}
+
+func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param) (err error) {
+	lg := log.WithField("func", "Job.ticket")
+	lg = lg.WithField("ticket", ticket)
+	defer func() {
+		if r := recover(); r != nil {
+			lg.Errorf("recover from panic %v", err)
+		}
+	}()
+	var start int64
+	for {
+		if j.IsFixedTime {
+			lg.Infof("try to get fixedTime start")
+			start, err = j.fixedTimeStart(ticket)
+			if err != nil {
+				if err == completedErr {
+					lg.Infof("the job is completed, start %s, stop to run", timeFormat(start))
+					return nil
+				}
+				return err
+			}
+		} else {
+			lg.Infof("try to get dynamicTime start")
+			start, err = j.dynamicTimeStart(ticket)
+			if err != nil {
+				if err == timeIsEarlyErr {
+					lg.Infof("the start %s is too early, continue to wait", timeFormat(start))
+					return nil
+				}
+				return err
+			}
+		}
+		ctx = context.WithValue(ctx, JobCtx, j)
+		ctx = context.WithValue(ctx, TaskUIDCtx, fmt.Sprintf("%s:%s", ticket, timeFormat(start)))
+		// before task
+		for _, fn := range j.BeforeTaskRun {
+			if err := fn(ctx); err != nil {
+				return err
+			}
+		}
+		// run the task
+		if err := j.Task.Run(ctx, ticket, params, start); err != nil {
+			return err
+		}
+		// after task
+		for _, fn := range j.AfterTaskRun {
+			if err := fn(ctx); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 var (
@@ -134,6 +150,7 @@ func (j Job) dynamicTimeStart(ticket Ticket) (start int64, err error) {
 	var ok bool
 	start, ok, err = j.TimeRange.DynamicRace(ticket)
 	if err != nil {
+		err = fmt.Errorf("dynamicRace: %w", err)
 		return
 	}
 	if !ok {

@@ -2,6 +2,7 @@ package rudder
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"testing"
 	"time"
@@ -48,4 +49,17 @@ func TestJob_Run(t *testing.T) {
 	if err := trange.CleanRedis(domain); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func TestNewTimeRange(t *testing.T) {
+	trange, err := NewTimeRange(&TimRangeConfig{
+		Unit: "5m",
+		Dynamic: &Dynamic{
+			Offset: "0",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Println(trange)
 }

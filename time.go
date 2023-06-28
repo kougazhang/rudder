@@ -18,7 +18,7 @@ type TimRangeConfig struct {
 	// Unit the time of start goes foreword a unit
 	Unit string
 	// Dynamic is used of DynamicRace
-	Dynamic Dynamic
+	Dynamic *Dynamic
 }
 
 type Dynamic struct {
@@ -32,7 +32,9 @@ func NewTimeRange(cfg *TimRangeConfig) (trange TimeRange, err error) {
 	if err != nil {
 		return
 	}
-	trange.dynamic.offset, err = itime.ParseDuration(cfg.Dynamic.Offset)
+	if cfg.Dynamic != nil {
+		trange.dynamic.offset, err = itime.ParseDuration(cfg.Dynamic.Offset)
+	}
 	return
 }
 
@@ -75,12 +77,14 @@ func (t TimeRange) DynamicRace(ticket Ticket) (start int64, ok bool, err error) 
 
 	start, err = t.get(key)
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			// calculate it by offset
-			// lock then set it
+		if !errors.Is(err, redis.Nil) {
 			return
 		}
-		return
+		// calculate it by offset
+		start, err = t.offsetNow()
+		if err != nil {
+			return 0, false, fmt.Errorf("calulate: %w", err)
+		}
 	}
 
 	// Checks the current time meets the offset of start or not
@@ -92,9 +96,9 @@ func (t TimeRange) DynamicRace(ticket Ticket) (start int64, ok bool, err error) 
 	if start <= now {
 		ok = true
 		// increase the start
-		start, err = t.incrby(t.startKey(ticket))
+		err = t.set(key, time.Unix(start, 0).Add(t.unit))
 		if err != nil {
-			return
+			err = fmt.Errorf("set: %w", err)
 		}
 		return
 	}
@@ -141,7 +145,7 @@ func (t TimeRange) set(key string, tm time.Time) (err error) {
 	defer func() {
 		_ = rds.Close()
 	}()
-	_, err = rds.Set(key, tm.Unix(), time.Hour*24).Result()
+	_, err = rds.Set(key, tm.Unix(), time.Hour*24*30).Result()
 	return
 }
 
@@ -181,12 +185,12 @@ func (t TimeRange) offsetNow() (int64, error) {
 	minute, second := now.Minute(), now.Second()
 	offset := int64(t.dynamic.offset.Seconds())
 	switch t.unit {
-	case 300:
+	case time.Minute * 5:
 		return now.Unix()/300*300 - offset, nil
-	case 3600:
+	case time.Hour:
 		return now.Unix() - int64(second+minute*60) - offset, nil
 	default:
-		return 0, fmt.Errorf("unsupport unit %d", t.unit)
+		return 0, fmt.Errorf("unsupport unit %s", t.unit)
 	}
 }
 
@@ -248,6 +252,7 @@ func (t TimeRange) incrby(key string) (old int64, err error) {
 	lg := log.WithField("func", "TimeRange.incrby")
 	lockKey := t.lockKey(key + ":incrby")
 	if err := t.lock(lockKey); err != nil {
+		err = fmt.Errorf("lock: %w", err)
 		return 0, err
 	}
 	defer func() {
@@ -257,6 +262,7 @@ func (t TimeRange) incrby(key string) (old int64, err error) {
 	}()
 	rds, err := t.addr.NewClient()
 	if err != nil {
+		err = fmt.Errorf("newClient: %w", err)
 		return 0, err
 	}
 	defer func() {
@@ -265,11 +271,14 @@ func (t TimeRange) incrby(key string) (old int64, err error) {
 
 	old, err = rds.Get(key).Int64()
 	if err != nil {
+		err = fmt.Errorf("get key %s: %w", key, err)
 		return
 	}
 
-	increment := int64(t.unit.Seconds())
-	_, err = rds.Set(key, old+increment, time.Hour*24).Result()
+	err = t.set(key, time.Unix(old, 0).Add(t.unit))
+	if err != nil {
+		err = fmt.Errorf("set: %w", err)
+	}
 	return
 }
 
