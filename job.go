@@ -92,11 +92,7 @@ func (j Job) run(ctx context.Context) (err error) {
 func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param) (err error) {
 	lg := log.WithField("func", "Job.ticket")
 	lg = lg.WithField("ticket", ticket)
-	defer func() {
-		if r := recover(); r != nil {
-			lg.Errorf("recover from panic %v", err)
-		}
-	}()
+
 	var start int64
 	for {
 		if j.IsFixedTime {
