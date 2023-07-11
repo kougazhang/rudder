@@ -42,10 +42,11 @@ func TestJob_Run(t *testing.T) {
 		Bucket: map[Ticket][]Param{
 			domain: nil,
 		},
-		Task:        task{},
-		Interval:    time.Second * 5,
-		TimeRange:   trange,
-		IsFixedTime: false,
+		Task:      task{},
+		Interval:  time.Second * 5,
+		TimeRange: trange,
+		//IsFixedTime: false,
+		IsFixedTime: true,
 		//Mode:        CronMode,
 	}
 	job.AfterJobRun = []func(ctx context.Context) error{

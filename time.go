@@ -53,7 +53,8 @@ type dynamic struct {
 // If true, ok is true
 // If not, ok is false
 // If the start didn't exist, calculate it by offset.
-func (t TimeRange) DynamicRace(ticket Ticket) (start int64, ok bool, err error) {
+// bugfix: using jobStart to avoid if too many long time costed tickets, start calculated by offset is wrong.
+func (t TimeRange) DynamicRace(ticket Ticket, jobStart int64) (start int64, ok bool, err error) {
 	lg := log.WithField("func", "TimeRange.DynamicRace")
 	rds, err := t.addr.NewClient()
 	if err != nil {
@@ -75,16 +76,14 @@ func (t TimeRange) DynamicRace(ticket Ticket) (start int64, ok bool, err error) 
 		}
 	}()
 
+	// get start from redis or using jobStart
 	start, err = t.get(key)
 	if err != nil {
 		if !errors.Is(err, redis.Nil) {
 			return
 		}
-		// calculate it by offset
-		start, err = t.offsetNow()
-		if err != nil {
-			return 0, false, fmt.Errorf("calulate: %w", err)
-		}
+		// calculate it by offset if start does not exist in redis
+		start = jobStart
 	}
 
 	// Checks the current time meets the offset of start or not

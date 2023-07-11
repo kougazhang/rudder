@@ -101,17 +101,21 @@ const (
 )
 
 // run prefers ticket than time first
-func (j Job) run(ctx context.Context) (err error) {
+func (j Job) run(ctx context.Context) error {
 	lg := log.WithField("func", "Job.run")
+	jobStart, err := j.TimeRange.offsetNow()
+	if err != nil {
+		return err
+	}
 	for ticket, params := range j.Bucket {
-		if err = j.ticket(ctx, ticket, params); err != nil {
+		if err = j.ticket(ctx, ticket, params, jobStart); err != nil {
 			lg.Errorf("ticket:%v, err %v", ticket, err)
 		}
 	}
 	return nil
 }
 
-func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param) (err error) {
+func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart int64) (err error) {
 	lg := log.WithField("func", "Job.ticket")
 	lg = lg.WithField("ticket", ticket)
 
@@ -129,7 +133,7 @@ func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param) (err err
 			}
 		} else {
 			lg.Infof("try to get dynamicTime start")
-			start, err = j.dynamicTimeStart(ticket)
+			start, err = j.dynamicTimeStart(ticket, jobStart)
 			if err != nil {
 				if err == timeIsEarlyErr {
 					lg.Infof("the start %s is too early, continue to wait", timeFormat(start))
@@ -164,9 +168,9 @@ var (
 	timeIsEarlyErr = errors.New("the time is too early")
 )
 
-func (j Job) dynamicTimeStart(ticket Ticket) (start int64, err error) {
+func (j Job) dynamicTimeStart(ticket Ticket, jobStart int64) (start int64, err error) {
 	var ok bool
-	start, ok, err = j.TimeRange.DynamicRace(ticket)
+	start, ok, err = j.TimeRange.DynamicRace(ticket, jobStart)
 	if err != nil {
 		err = fmt.Errorf("dynamicRace: %w", err)
 		return
