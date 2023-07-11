@@ -21,8 +21,13 @@ type Job struct {
 	Mode Mode
 	// Task runs a ticket fetching from the bucket.
 	Task Task
-	// BeforeRun runs a list of functions before the job
-	BeforeRun []func(ctx context.Context) error
+	// InitJob runs a list of functions before the job
+	// InitJob just does once.
+	InitJob []func(ctx context.Context) error
+	// BeforeJobRun does each period before the job run.
+	BeforeJobRun []func(ctx context.Context) error
+	// AfterJobRun does each period after the job run.
+	AfterJobRun []func(ctx context.Context) error
 	// BeforeTaskRun runs a list of functions before per task
 	BeforeTaskRun []func(ctx context.Context) error
 	// AfterTaskRun runs a list of functions after per task
@@ -51,8 +56,8 @@ func (j Job) Run() error {
 	lg := log.WithField("func", "Job.Run")
 	ctx := context.Background()
 	// before run
-	if j.BeforeRun != nil {
-		for _, fn := range j.BeforeRun {
+	if j.InitJob != nil {
+		for _, fn := range j.InitJob {
 			if err := fn(ctx); err != nil {
 				return err
 			}
@@ -61,8 +66,25 @@ func (j Job) Run() error {
 	// run
 	for { // for cron
 		var err error
+		// before the job
+		if j.BeforeJobRun != nil {
+			for _, fn := range j.BeforeJobRun {
+				if err := fn(ctx); err != nil {
+					return err
+				}
+			}
+		}
+		// run the job
 		if err = j.run(ctx); err != nil {
 			lg.Errorf("%v", err)
+		}
+		// after the job
+		if j.AfterJobRun != nil {
+			for _, fn := range j.AfterJobRun {
+				if err := fn(ctx); err != nil {
+					return err
+				}
+			}
 		}
 		if j.Mode.HasMode(CronMode) {
 			lg.Infof("run the job after %s", j.Interval)
