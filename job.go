@@ -137,6 +137,7 @@ func (j Job) specifiedTickets(ctx context.Context, ticket Ticket, params []Param
 		}
 		// run the task
 		ctx = j.setTaskUID(ctx, ticket, start)
+		lg.Debugf("specifiedTickets: taskUID %s", ctx.Value(TaskUIDCtx))
 		if err := j.Task.Run(ctx, ticket, params, start); err != nil {
 			return err
 		}

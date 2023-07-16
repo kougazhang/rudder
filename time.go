@@ -49,7 +49,7 @@ type dynamic struct {
 	offset time.Duration
 }
 
-func (t TimeRange) PushToQueue(ticket Ticket, jobStart int64) error {
+func (t TimeRange) PushToQueue(ticket Ticket, jobStarts ...int64) error {
 	rds, err := t.addr.NewClient()
 	if err != nil {
 		return err
@@ -58,7 +58,11 @@ func (t TimeRange) PushToQueue(ticket Ticket, jobStart int64) error {
 		_ = rds.Close()
 	}()
 
-	_, err = rds.RPush(t.TicketQueue(ticket), jobStart).Result()
+	values := make([]any, 0, len(jobStarts))
+	for _, jobStart := range jobStarts {
+		values = append(values, jobStart)
+	}
+	_, err = rds.RPush(t.TicketQueue(ticket), values...).Result()
 	if err == nil || err == redis.Nil {
 		return nil
 	}
