@@ -15,7 +15,7 @@ func (t task) Run(ctx context.Context, domain Ticket, pvds []Param, start int64)
 	if !ok {
 		log.Fatal("taskUID is invalid")
 	}
-	log.Println("run domain: ", domain, taskUID)
+	log.Println("run domain: ", domain, taskUID, start)
 	return nil
 }
 
@@ -55,6 +55,10 @@ func TestJob_Run(t *testing.T) {
 			log.Println("do the AfterJobRun")
 			return nil
 		},
+	}
+	err := job.TimeRange.PushToQueue(domain, time.Now().Add(time.Hour*24).Unix())
+	if err != nil {
+		t.Fatal(err)
 	}
 	if err := job.Run(); err != nil {
 		t.Fatal(err)

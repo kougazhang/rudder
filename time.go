@@ -49,6 +49,34 @@ type dynamic struct {
 	offset time.Duration
 }
 
+func (t TimeRange) PushToQueue(ticket Ticket, jobStart int64) error {
+	rds, err := t.addr.NewClient()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = rds.Close()
+	}()
+
+	_, err = rds.RPush(t.TicketQueue(ticket), jobStart).Result()
+	if err == nil || err == redis.Nil {
+		return nil
+	}
+	return err
+}
+
+func (t TimeRange) PopFromQueue(ticket Ticket) (int64, error) {
+	rds, err := t.addr.NewClient()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = rds.Close()
+	}()
+
+	return rds.LPop(t.TicketQueue(ticket)).Int64()
+}
+
 // DynamicRace Checks the current time meets the offset of start or not
 // If true, ok is true
 // If not, ok is false
@@ -162,6 +190,7 @@ func (t TimeRange) CleanRedis(ticket Ticket) error {
 		t.endKey(ticket),
 		t.lockKey(t.startKey(ticket)),
 		t.lockKey(t.endKey(ticket)),
+		t.TicketQueue(ticket),
 	}
 	_, err = rds.Del(keys...).Result()
 	return err
@@ -173,6 +202,10 @@ func (t TimeRange) lockKey(flag string) string {
 
 func (t TimeRange) startKey(ticket Ticket) string {
 	return string("rudder:" + ticket + ":start")
+}
+
+func (t TimeRange) TicketQueue(ticket Ticket) string {
+	return string("rudder:" + ticket + ":queue")
 }
 
 func (t TimeRange) endKey(ticket Ticket) string {

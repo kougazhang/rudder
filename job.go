@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/go-redis/redis"
 	log "github.com/sirupsen/logrus"
 	"time"
 )
@@ -111,8 +112,35 @@ func (j Job) run(ctx context.Context) error {
 		if err = j.ticket(ctx, ticket, params, jobStart); err != nil {
 			lg.Errorf("ticket:%v, err %v", ticket, err)
 		}
+		// run the specified time points
+		if err = j.specifiedTickets(ctx, ticket, params); err != nil {
+			lg.Errorf("specifiedTickets:%v, err %v", ticket, err)
+		}
 	}
 	return nil
+}
+
+// specifiedTickets runs the specified time points
+func (j Job) specifiedTickets(ctx context.Context, ticket Ticket, params []Param) (err error) {
+	lg := log.WithField("func", "Job.specifiedTickets")
+	lg = lg.WithField("ticket", ticket)
+
+	for {
+		// get specified starts from redis
+		start, err := j.TimeRange.PopFromQueue(ticket)
+		if err != nil {
+			if err == redis.Nil {
+				lg.Infof("the queue %s is empty", j.TimeRange.TicketQueue(ticket))
+				return nil
+			}
+			return err
+		}
+		// run the task
+		ctx = j.setTaskUID(ctx, ticket, start)
+		if err := j.Task.Run(ctx, ticket, params, start); err != nil {
+			return err
+		}
+	}
 }
 
 func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart int64) (err error) {
@@ -143,7 +171,7 @@ func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart
 			}
 		}
 		ctx = context.WithValue(ctx, JobCtx, j)
-		ctx = context.WithValue(ctx, TaskUIDCtx, fmt.Sprintf("%s:%s", ticket, timeFormat(start)))
+		ctx = j.setTaskUID(ctx, ticket, start)
 		// before task
 		for _, fn := range j.BeforeTaskRun {
 			if err := fn(ctx); err != nil {
@@ -161,6 +189,10 @@ func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart
 			}
 		}
 	}
+}
+
+func (j Job) setTaskUID(ctx context.Context, ticket Ticket, start int64) context.Context {
+	return context.WithValue(ctx, TaskUIDCtx, fmt.Sprintf("%s:%s", ticket, timeFormat(start)))
 }
 
 var (
