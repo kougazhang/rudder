@@ -3,7 +3,7 @@ package rudder
 import (
 	"context"
 	"fmt"
-	"log"
+	log "github.com/sirupsen/logrus"
 	"testing"
 	"time"
 )
@@ -27,6 +27,7 @@ func TestJob_Run(t *testing.T) {
 			offset: time.Second,
 		},
 	}
+	log.SetLevel(log.DebugLevel)
 
 	var domain Ticket = "www.baidu.com"
 	if err := trange.CleanRedis(domain); err != nil {
@@ -48,6 +49,13 @@ func TestJob_Run(t *testing.T) {
 		//IsFixedTime: false,
 		IsFixedTime: true,
 		//Mode:        CronMode,
+	}
+	job.BeforeTaskRun = []TaskRunFn{
+		job.ConsumeState,
+		job.AddState,
+	}
+	job.AfterTaskRun = []TaskRunFn{
+		job.DelState,
 	}
 	job.AfterJobRun = []func(ctx context.Context) error{
 		func(ctx context.Context) error {

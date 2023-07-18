@@ -30,11 +30,11 @@ type Job struct {
 	// AfterJobRun does each period after the job run.
 	AfterJobRun []func(ctx context.Context) error
 	// BeforeTaskRun runs a list of functions before per task
-	BeforeTaskRun []func(ctx context.Context) error
+	BeforeTaskRun []TaskRunFn
 	// AfterTaskRun runs a list of functions after per task
 	// The lifetime of Task is as long as the job,
 	// so it's necessary to clean to avoid leaked some variables specially in the cron mode.
-	AfterTaskRun []func(ctx context.Context) error
+	AfterTaskRun []TaskRunFn
 	// Interval must be configured if cronMode is open
 	Interval time.Duration
 	// TimeRange is a range of time about a task
@@ -44,6 +44,8 @@ type Job struct {
 	// case 2: generate start and end dynamically by delay
 	IsFixedTime bool
 }
+
+type TaskRunFn func(ctx context.Context, ticket Ticket, params []Param, start int64) error
 
 // Task handles a ticket
 type Task interface {
@@ -175,7 +177,7 @@ func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart
 		ctx = j.setTaskUID(ctx, ticket, start)
 		// before task
 		for _, fn := range j.BeforeTaskRun {
-			if err := fn(ctx); err != nil {
+			if err := fn(ctx, ticket, params, start); err != nil {
 				return err
 			}
 		}
@@ -185,11 +187,47 @@ func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart
 		}
 		// after task
 		for _, fn := range j.AfterTaskRun {
-			if err := fn(ctx); err != nil {
+			if err := fn(ctx, ticket, params, start); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// AddState adds the lasting state before task running
+func (j Job) AddState(_ context.Context, ticket Ticket, params []Param, jobStart int64) error {
+	ticketParam := TicketParam{
+		Ticket:   ticket,
+		Params:   params,
+		JobStart: jobStart,
+	}
+	return j.TimeRange.AddState(ticketParam)
+}
+
+// DelState deletes the state added before the task running
+func (j Job) DelState(_ context.Context, ticket Ticket, _ []Param, _ int64) error {
+	res, err := j.TimeRange.PopState(ticket)
+	if errors.Is(err, redis.Nil) {
+		return nil
+	}
+	log.Debugf("delState params %v", res)
+	return err
+}
+
+// ConsumeState consumes the existed state of the task
+func (j Job) ConsumeState(ctx context.Context, ticket Ticket, _ []Param, _ int64) error {
+	param, err := j.TimeRange.PopState(ticket)
+	if err == nil {
+		return j.Task.Run(ctx, param.Ticket, param.Params, param.JobStart)
+
+	}
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil
+		}
+		return err
+	}
+	return err
 }
 
 func (j Job) setTaskUID(ctx context.Context, ticket Ticket, start int64) context.Context {
@@ -226,4 +264,11 @@ func (j Job) fixedTimeStart(ticket Ticket) (start int64, err error) {
 		return
 	}
 	return
+}
+
+// TicketParam is the params of method Job.ticket
+type TicketParam struct {
+	Ticket   Ticket  `json:"ticket"`
+	Params   []Param `json:"params"`
+	JobStart int64   `json:"job_start"`
 }

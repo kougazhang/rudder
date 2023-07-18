@@ -1,6 +1,7 @@
 package rudder
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/go-redis/redis"
@@ -8,6 +9,7 @@ import (
 	itime "github.com/kougazhang/time"
 	log "github.com/sirupsen/logrus"
 	"net"
+	"os"
 	"time"
 )
 
@@ -19,6 +21,8 @@ type TimRangeConfig struct {
 	Unit string
 	// Dynamic is used of DynamicRace
 	Dynamic *Dynamic
+	// UID If uid is not configured, default value is the hostname which assumes one job occupies the machine exclusively.
+	UID string
 }
 
 type Dynamic struct {
@@ -35,6 +39,16 @@ func NewTimeRange(cfg *TimRangeConfig) (trange TimeRange, err error) {
 	if cfg.Dynamic != nil {
 		trange.dynamic.offset, err = itime.ParseDuration(cfg.Dynamic.Offset)
 	}
+
+	trange.uid = cfg.UID
+	if len(cfg.UID) == 0 { // default value is the hostname
+		uid, err := os.Hostname()
+		if err != nil {
+			return TimeRange{}, err
+		}
+		trange.uid = uid
+	}
+
 	return
 }
 
@@ -43,12 +57,57 @@ type TimeRange struct {
 	addr    iredis.Addr
 	unit    time.Duration
 	dynamic dynamic
+	uid     string
 }
 
 type dynamic struct {
 	offset time.Duration
 }
 
+// AddState add the params to the state before task
+// notice: the state will expire after 12 hours
+func (t TimeRange) AddState(value TicketParam) error {
+	rds, err := t.addr.NewClient()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = rds.Close()
+	}()
+
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+
+	_, err = rds.Set(t.stateKey(value.Ticket), data, time.Hour*12).Result()
+	return err
+}
+
+// PopState removes the state AddState added.
+func (t TimeRange) PopState(ticket Ticket) (TicketParam, error) {
+	rds, err := t.addr.NewClient()
+	if err != nil {
+		return TicketParam{}, err
+	}
+	defer func() {
+		_ = rds.Close()
+	}()
+
+	script := `local val = redis.call('get', KEYS[1]) redis.call('del', KEYS[1]) return val`
+	raw, err := rds.Eval(script, []string{t.stateKey(ticket)}).String()
+	if err != nil {
+		return TicketParam{}, err
+	}
+	var param TicketParam
+	if err = json.Unmarshal([]byte(raw), &param); err != nil {
+		return TicketParam{}, err
+	}
+
+	return param, nil
+}
+
+// PushToQueue push elements to the queue
 func (t TimeRange) PushToQueue(ticket Ticket, jobStarts ...int64) error {
 	rds, err := t.addr.NewClient()
 	if err != nil {
@@ -69,6 +128,7 @@ func (t TimeRange) PushToQueue(ticket Ticket, jobStarts ...int64) error {
 	return err
 }
 
+// PopFromQueue pops elements from the queue
 func (t TimeRange) PopFromQueue(ticket Ticket) (int64, error) {
 	rds, err := t.addr.NewClient()
 	if err != nil {
@@ -214,6 +274,10 @@ func (t TimeRange) TicketQueue(ticket Ticket) string {
 
 func (t TimeRange) endKey(ticket Ticket) string {
 	return string("rudder:" + ticket + ":end")
+}
+
+func (t TimeRange) stateKey(ticket Ticket) string {
+	return string("rudder:" + string(ticket) + t.uid + ":state")
 }
 
 func (t TimeRange) offsetNow() (int64, error) {
