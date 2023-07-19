@@ -110,50 +110,50 @@ func (j Job) run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	lg.Debugf("fixedTime is %v", j.IsFixedTime)
 	for ticket, params := range j.Bucket {
-		if err = j.ticket(ctx, ticket, params, jobStart); err != nil {
+		if err = j.runTicket(ctx, ticket, params, jobStart); err != nil {
 			lg.Errorf("ticket:%v, err %v", ticket, err)
 		}
 		// run the specified time points
-		if err = j.specifiedTickets(ctx, ticket, params); err != nil {
-			lg.Errorf("specifiedTickets:%v, err %v", ticket, err)
+		if err = j.runTicketFromQueue(ctx, ticket, params); err != nil {
+			lg.Errorf("runTicketFromQueue:%v, err %v", ticket, err)
 		}
 	}
 	return nil
 }
 
-// specifiedTickets runs the specified time points
-func (j Job) specifiedTickets(ctx context.Context, ticket Ticket, params []Param) (err error) {
-	lg := log.WithField("func", "Job.specifiedTickets")
+// runTicketFromQueue runs the specified time points
+func (j Job) runTicketFromQueue(ctx context.Context, ticket Ticket, params []Param) (err error) {
+	lg := log.WithField("func", "Job.runTicketFromQueue")
 	lg = lg.WithField("ticket", ticket)
 
 	for {
 		// get specified starts from redis
-		start, err := j.TimeRange.PopFromQueue(ticket)
+		start, err := j.TimeRange.PopFromJobQueue(ticket)
 		if err != nil {
 			if err == redis.Nil {
-				lg.Infof("the queue %s is empty", j.TimeRange.TicketQueue(ticket))
+				lg.Infof("the queue %s is empty", j.TimeRange.jobQueue(ticket))
 				return nil
 			}
 			return err
 		}
 		// run the task
 		ctx = j.setTaskUID(ctx, ticket, start)
-		lg.Debugf("specifiedTickets: taskUID %s", ctx.Value(TaskUIDCtx))
+		lg.Debugf("runTicketFromQueue: taskUID %s", ctx.Value(TaskUIDCtx))
 		if err := j.Task.Run(ctx, ticket, params, start); err != nil {
 			return err
 		}
 	}
 }
 
-func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart int64) (err error) {
+func (j Job) runTicket(ctx context.Context, ticket Ticket, params []Param, jobStart int64) (err error) {
 	lg := log.WithField("func", "Job.ticket")
 	lg = lg.WithField("ticket", ticket)
 
 	var start int64
 	for {
 		if j.IsFixedTime {
-			lg.Infof("try to get fixedTime start")
 			start, err = j.fixedTimeStart(ticket)
 			if err != nil {
 				if err == completedErr {
@@ -163,7 +163,6 @@ func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart
 				return err
 			}
 		} else {
-			lg.Infof("try to get dynamicTime start")
 			start, err = j.dynamicTimeStart(ticket, jobStart)
 			if err != nil {
 				if err == timeIsEarlyErr {
@@ -173,8 +172,6 @@ func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart
 				return err
 			}
 		}
-		ctx = context.WithValue(ctx, JobCtx, j)
-		ctx = j.setTaskUID(ctx, ticket, start)
 		// before task
 		for _, fn := range j.BeforeTaskRun {
 			if err := fn(ctx, ticket, params, start); err != nil {
@@ -182,6 +179,8 @@ func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart
 			}
 		}
 		// run the task
+		ctx = context.WithValue(ctx, JobCtx, j)
+		ctx = j.setTaskUID(ctx, ticket, start)
 		if err := j.Task.Run(ctx, ticket, params, start); err != nil {
 			return err
 		}
@@ -194,33 +193,35 @@ func (j Job) ticket(ctx context.Context, ticket Ticket, params []Param, jobStart
 	}
 }
 
-// AddState adds the lasting state before task running
-func (j Job) AddState(_ context.Context, ticket Ticket, params []Param, jobStart int64) error {
+// SetState adds the lasting state before task running
+// SetState consumes the existed state of the task
+func (j Job) SetState(ctx context.Context, ticket Ticket, params []Param, jobStart int64) error {
+	// add new data to queue
 	ticketParam := TicketParam{
-		Ticket:   ticket,
-		Params:   params,
-		JobStart: jobStart,
+		Ticket:      ticket,
+		Params:      params,
+		JobStart:    jobStart,
+		MarshalTime: time.Now(),
 	}
-	return j.TimeRange.AddState(ticketParam)
+	log.Debugf("setState: ticketParam %v", ticketParam)
+	if err := j.TimeRange.rpushToStateQueue(ticketParam); err != nil {
+		return err
+	}
+	// the length of 1 means no expired data
+	length, err := j.TimeRange.lenStateQueue(ticket)
+	if err != nil {
+		return err
+	}
+	if length <= 1 {
+		return nil
+	}
+	// consume the expired data
+	return j.consumeState(ctx, ticket)
 }
 
 // DelState deletes the state added before the task running
 func (j Job) DelState(_ context.Context, ticket Ticket, _ []Param, _ int64) error {
-	res, err := j.TimeRange.PopState(ticket)
-	if errors.Is(err, redis.Nil) {
-		return nil
-	}
-	log.Debugf("delState params %v", res)
-	return err
-}
-
-// ConsumeState consumes the existed state of the task
-func (j Job) ConsumeState(ctx context.Context, ticket Ticket, _ []Param, _ int64) error {
-	param, err := j.TimeRange.PopState(ticket)
-	if err == nil {
-		return j.Task.Run(ctx, param.Ticket, param.Params, param.JobStart)
-
-	}
+	_, err := j.TimeRange.rpopFromStateQueue(ticket)
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return nil
@@ -228,6 +229,42 @@ func (j Job) ConsumeState(ctx context.Context, ticket Ticket, _ []Param, _ int64
 		return err
 	}
 	return err
+}
+
+// consumeState consumes the existed state of the task
+// The expiration of task state is 12 hours
+func (j Job) consumeState(ctx context.Context, ticket Ticket) error {
+	var index int64
+	for {
+		param, err := j.TimeRange.lindexStateQueue(ticket, index)
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				return nil
+			}
+			return err
+		}
+		// drop the expired state
+		if time.Now().Sub(param.MarshalTime) >= time.Hour*12 {
+			log.Infof("consumeState: drop expire task state %v", param)
+			_, err = j.TimeRange.lpopFromStateQueue(ticket)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		// consume the task
+		ctx = j.setTaskUID(ctx, param.Ticket, param.JobStart)
+		log.Infof("consumeState: consume task, taskUID %s", ctx.Value(TaskUIDCtx).(string))
+		err = j.Task.Run(ctx, param.Ticket, param.Params, param.JobStart)
+		if err != nil {
+			return err
+		}
+		// pop it from the queue
+		_, err = j.TimeRange.lpopFromStateQueue(ticket)
+		if err != nil {
+			return err
+		}
+	}
 }
 
 func (j Job) setTaskUID(ctx context.Context, ticket Ticket, start int64) context.Context {
@@ -271,4 +308,6 @@ type TicketParam struct {
 	Ticket   Ticket  `json:"ticket"`
 	Params   []Param `json:"params"`
 	JobStart int64   `json:"job_start"`
+	// MarshalTime is only used for state task
+	MarshalTime time.Time `json:"marshal_time"`
 }

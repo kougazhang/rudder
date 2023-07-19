@@ -64,9 +64,8 @@ type dynamic struct {
 	offset time.Duration
 }
 
-// AddState add the params to the state before task
-// notice: the state will expire after 12 hours
-func (t TimeRange) AddState(value TicketParam) error {
+// rpushToStateQueue add the params to the state before task
+func (t TimeRange) rpushToStateQueue(value TicketParam) error {
 	rds, err := t.addr.NewClient()
 	if err != nil {
 		return err
@@ -80,12 +79,11 @@ func (t TimeRange) AddState(value TicketParam) error {
 		return err
 	}
 
-	_, err = rds.Set(t.stateKey(value.Ticket), data, time.Hour*12).Result()
+	_, err = rds.RPush(t.stateKey(value.Ticket), data).Result()
 	return err
 }
 
-// PopState removes the state AddState added.
-func (t TimeRange) PopState(ticket Ticket) (TicketParam, error) {
+func (t TimeRange) lindexStateQueue(ticket Ticket, index int64) (TicketParam, error) {
 	rds, err := t.addr.NewClient()
 	if err != nil {
 		return TicketParam{}, err
@@ -94,8 +92,7 @@ func (t TimeRange) PopState(ticket Ticket) (TicketParam, error) {
 		_ = rds.Close()
 	}()
 
-	script := `local val = redis.call('get', KEYS[1]) redis.call('del', KEYS[1]) return val`
-	raw, err := rds.Eval(script, []string{t.stateKey(ticket)}).String()
+	raw, err := rds.LIndex(t.stateKey(ticket), index).Result()
 	if err != nil {
 		return TicketParam{}, err
 	}
@@ -107,8 +104,65 @@ func (t TimeRange) PopState(ticket Ticket) (TicketParam, error) {
 	return param, nil
 }
 
-// PushToQueue push elements to the queue
-func (t TimeRange) PushToQueue(ticket Ticket, jobStarts ...int64) error {
+func (t TimeRange) lenStateQueue(ticket Ticket) (int64, error) {
+	rds, err := t.addr.NewClient()
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		_ = rds.Close()
+	}()
+
+	return rds.LLen(t.stateKey(ticket)).Result()
+}
+
+// lpopFromStateQueue removes the state SetState added.
+func (t TimeRange) lpopFromStateQueue(ticket Ticket) (TicketParam, error) {
+	rds, err := t.addr.NewClient()
+	if err != nil {
+		return TicketParam{}, err
+	}
+	defer func() {
+		_ = rds.Close()
+	}()
+
+	raw, err := rds.LPop(t.stateKey(ticket)).Result()
+	if err != nil {
+		return TicketParam{}, err
+	}
+	var param TicketParam
+	if err = json.Unmarshal([]byte(raw), &param); err != nil {
+		return TicketParam{}, err
+	}
+
+	return param, nil
+}
+
+// rpopFromStateQueue is similar as the lpopFromStateQueue
+func (t TimeRange) rpopFromStateQueue(ticket Ticket) (TicketParam, error) {
+	rds, err := t.addr.NewClient()
+	if err != nil {
+		return TicketParam{}, err
+	}
+	defer func() {
+		_ = rds.Close()
+	}()
+
+	raw, err := rds.RPop(t.stateKey(ticket)).Result()
+	if err != nil {
+		return TicketParam{}, err
+	}
+	var param TicketParam
+	if err = json.Unmarshal([]byte(raw), &param); err != nil {
+		return TicketParam{}, err
+	}
+
+	return param, nil
+}
+
+// PushToJobQueue push elements to the queue
+// all tickets in the job will run the specified starts from the queue
+func (t TimeRange) PushToJobQueue(ticket Ticket, jobStarts ...int64) error {
 	rds, err := t.addr.NewClient()
 	if err != nil {
 		return err
@@ -121,15 +175,16 @@ func (t TimeRange) PushToQueue(ticket Ticket, jobStarts ...int64) error {
 	for _, jobStart := range jobStarts {
 		values = append(values, jobStart)
 	}
-	_, err = rds.RPush(t.TicketQueue(ticket), values...).Result()
+	_, err = rds.RPush(t.jobQueue(ticket), values...).Result()
 	if err == nil || err == redis.Nil {
 		return nil
 	}
 	return err
 }
 
-// PopFromQueue pops elements from the queue
-func (t TimeRange) PopFromQueue(ticket Ticket) (int64, error) {
+// PopFromJobQueue pops elements from the queue
+// all tickets in the job will run the specified starts from the queue
+func (t TimeRange) PopFromJobQueue(ticket Ticket) (int64, error) {
 	rds, err := t.addr.NewClient()
 	if err != nil {
 		return 0, err
@@ -138,7 +193,7 @@ func (t TimeRange) PopFromQueue(ticket Ticket) (int64, error) {
 		_ = rds.Close()
 	}()
 
-	return rds.LPop(t.TicketQueue(ticket)).Int64()
+	return rds.LPop(t.jobQueue(ticket)).Int64()
 }
 
 // DynamicRace Checks the current time meets the offset of start or not
@@ -254,7 +309,7 @@ func (t TimeRange) CleanRedis(ticket Ticket) error {
 		t.endKey(ticket),
 		t.lockKey(t.startKey(ticket)),
 		t.lockKey(t.endKey(ticket)),
-		t.TicketQueue(ticket),
+		t.jobQueue(ticket),
 	}
 	_, err = rds.Del(keys...).Result()
 	return err
@@ -268,8 +323,8 @@ func (t TimeRange) startKey(ticket Ticket) string {
 	return string("rudder:" + ticket + ":start")
 }
 
-func (t TimeRange) TicketQueue(ticket Ticket) string {
-	return string("rudder:" + ticket + ":queue")
+func (t TimeRange) jobQueue(ticket Ticket) string {
+	return string("rudder:" + ticket + ":job_queue")
 }
 
 func (t TimeRange) endKey(ticket Ticket) string {
@@ -277,7 +332,7 @@ func (t TimeRange) endKey(ticket Ticket) string {
 }
 
 func (t TimeRange) stateKey(ticket Ticket) string {
-	return string("rudder:" + string(ticket) + t.uid + ":state")
+	return "rudder:" + string(ticket) + ":" + t.uid + ":state_queue"
 }
 
 func (t TimeRange) offsetNow() (int64, error) {

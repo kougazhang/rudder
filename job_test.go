@@ -15,17 +15,21 @@ func (t task) Run(ctx context.Context, domain Ticket, pvds []Param, start int64)
 	if !ok {
 		log.Fatal("taskUID is invalid")
 	}
-	log.Println("run domain: ", domain, taskUID, start)
+	log.Println("task run domain: ", domain, taskUID, start)
+	//time.Sleep(time.Second * 2)
 	return nil
 }
 
 func TestJob_Run(t *testing.T) {
-	trange := TimeRange{
-		addr: "127.0.0.1:6379/0",
-		unit: 5 * time.Minute,
-		dynamic: dynamic{
-			offset: time.Second,
+	trange, err := NewTimeRange(&TimRangeConfig{
+		RedisAddr: "127.0.0.1:6379/0",
+		Unit:      "5m",
+		Dynamic: &Dynamic{
+			Offset: "1s",
 		},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 	log.SetLevel(log.DebugLevel)
 
@@ -33,10 +37,10 @@ func TestJob_Run(t *testing.T) {
 	if err := trange.CleanRedis(domain); err != nil {
 		log.Fatal(err)
 	}
-	if err := trange.SetStart(domain, time.Now().Add(-time.Hour)); err != nil {
+	if err := trange.SetStart(domain, time.Now().Add(-time.Minute*10)); err != nil {
 		t.Fatal(err)
 	}
-	if err := trange.SetEnd(domain, time.Now().Add(time.Hour)); err != nil {
+	if err := trange.SetEnd(domain, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	job := Job{
@@ -51,8 +55,7 @@ func TestJob_Run(t *testing.T) {
 		//Mode:        CronMode,
 	}
 	job.BeforeTaskRun = []TaskRunFn{
-		job.ConsumeState,
-		job.AddState,
+		job.SetState,
 	}
 	job.AfterTaskRun = []TaskRunFn{
 		job.DelState,
@@ -64,7 +67,7 @@ func TestJob_Run(t *testing.T) {
 			return nil
 		},
 	}
-	err := job.TimeRange.PushToQueue(domain, time.Now().Add(time.Hour*24).Unix())
+	err = job.TimeRange.PushToJobQueue(domain, time.Now().Add(time.Hour*24).Unix())
 	if err != nil {
 		t.Fatal(err)
 	}
