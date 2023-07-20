@@ -1,3 +1,6 @@
+// Package rudder contains some important conceptions like Job, Task etc.
+// Job runs a batch of task in a range of time in the bucket.
+// Task handles a ticket of specified time point start
 package rudder
 
 import (
@@ -47,7 +50,7 @@ type Job struct {
 
 type TaskRunFn func(ctx context.Context, ticket Ticket, params []Param, start int64) error
 
-// Task handles a ticket
+// Task handles a ticket of specified time point start
 type Task interface {
 	// Run the entrance of task
 	Run(ctx context.Context, ticket Ticket, params []Param, start int64) error
