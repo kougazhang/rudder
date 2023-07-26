@@ -161,7 +161,7 @@ func (t TimeRange) rpopFromStateQueue(ticket Ticket) (TicketParam, error) {
 }
 
 // PushToJobQueue push elements to the queue
-// all tickets in the job will run the specified starts from the queue
+// the ticket in the job will run the specified starts from the queue
 func (t TimeRange) PushToJobQueue(ticket Ticket, jobStarts ...int64) error {
 	rds, err := t.addr.NewClient()
 	if err != nil {
@@ -183,7 +183,7 @@ func (t TimeRange) PushToJobQueue(ticket Ticket, jobStarts ...int64) error {
 }
 
 // PopFromJobQueue pops elements from the queue
-// all tickets in the job will run the specified starts from the queue
+// the ticket in the job will run the specified starts from the queue
 func (t TimeRange) PopFromJobQueue(ticket Ticket) (int64, error) {
 	rds, err := t.addr.NewClient()
 	if err != nil {
