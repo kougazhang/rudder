@@ -21,8 +21,19 @@ type TimRangeConfig struct {
 	Unit string
 	// Dynamic is used of DynamicRace
 	Dynamic *Dynamic
-	// UID If uid is not configured, default value is the hostname which assumes one job occupies the machine exclusively.
+
+	// The difference between UID and JobUID:
+	// The service deployed on the docker has one or many service instance.
+	// UID is designed as the service instance UID. It is used to distinct different service instance.
+	// JobUID is designed as the service. It resolves different jobs maybe confused when they shares the same redis.
+
+	// If UID is not configured, default value is the hostname which assumes one job occupies the machine exclusively.
 	UID string
+	// JobUID is used to distinct different jobs in the same redis,
+	// the old style rudder:ticket:type maybe conflict, for example:
+	// the monitor job and the work job both have the rudder:ticket:start and rudder:ticket:end.
+	// In order to compatible existed data online, if UID is not set, the old style still can be used.
+	JobUID string
 }
 
 type Dynamic struct {
@@ -48,6 +59,7 @@ func NewTimeRange(cfg *TimRangeConfig) (trange TimeRange, err error) {
 		}
 		trange.uid = uid
 	}
+	trange.jobUID = cfg.JobUID
 
 	return
 }
@@ -58,6 +70,7 @@ type TimeRange struct {
 	unit    time.Duration
 	dynamic dynamic
 	uid     string
+	jobUID  string
 }
 
 type dynamic struct {
@@ -190,7 +203,7 @@ func (t TimeRange) PushToTicketQueue(ticket Ticket, params ...TicketQueueParam) 
 		values = append(values, data)
 	}
 	log.Debugf("pushToTicketQueue: push to param %v...", values)
-	_, err = rds.RPush(t.ticketQueue(ticket), values...).Result()
+	_, err = rds.RPush(t.ticketQueueKey(ticket), values...).Result()
 	if err == nil || err == redis.Nil {
 		return nil
 	}
@@ -210,7 +223,7 @@ func (t TimeRange) PopFromTicketQueue(ticket Ticket) (int64, error) {
 
 	fetched := make(map[string]struct{}, 0)
 	for {
-		data, err := rds.LPop(t.ticketQueue(ticket)).Bytes()
+		data, err := rds.LPop(t.ticketQueueKey(ticket)).Bytes()
 		if err != nil {
 			return 0, err
 		}
@@ -233,7 +246,7 @@ func (t TimeRange) PopFromTicketQueue(ticket Ticket) (int64, error) {
 		if now.Equal(param.Effective) || now.Before(param.Effective) {
 			// put it back
 			log.Debugf("popFromTicketQueue: put it back param %v...", param)
-			_, err = rds.RPush(t.ticketQueue(ticket), data).Result()
+			_, err = rds.RPush(t.ticketQueueKey(ticket), data).Result()
 			if err != nil {
 				return 0, err
 			}
@@ -375,7 +388,7 @@ func (t TimeRange) CleanRedis(ticket Ticket) error {
 		t.endKey(ticket),
 		t.lockKey(t.startKey(ticket)),
 		t.lockKey(t.endKey(ticket)),
-		t.ticketQueue(ticket),
+		t.ticketQueueKey(ticket),
 	}
 	_, err = rds.Del(keys...).Result()
 	return err
@@ -386,18 +399,30 @@ func (t TimeRange) lockKey(flag string) string {
 }
 
 func (t TimeRange) startKey(ticket Ticket) string {
+	if len(t.jobUID) > 0 {
+		return "rudder:" + t.jobUID + ":" + string(ticket) + ":start"
+	}
 	return string("rudder:" + ticket + ":start")
 }
 
-func (t TimeRange) ticketQueue(ticket Ticket) string {
+func (t TimeRange) ticketQueueKey(ticket Ticket) string {
+	if len(t.jobUID) > 0 {
+		return "rudder:" + t.jobUID + ":" + string(ticket) + ":ticket_queue"
+	}
 	return string("rudder:" + ticket + ":ticket_queue")
 }
 
 func (t TimeRange) endKey(ticket Ticket) string {
+	if len(t.jobUID) > 0 {
+		return "rudder:" + t.jobUID + ":" + string(ticket) + ":end"
+	}
 	return string("rudder:" + ticket + ":end")
 }
 
 func (t TimeRange) stateKey(ticket Ticket) string {
+	if len(t.jobUID) > 0 {
+		return "rudder:" + t.jobUID + ":" + string(ticket) + t.uid + ":state_queue"
+	}
 	return "rudder:" + string(ticket) + ":" + t.uid + ":state_queue"
 }
 

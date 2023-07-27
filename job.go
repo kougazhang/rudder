@@ -136,7 +136,7 @@ func (j Job) runTicketFromQueue(ctx context.Context, ticket Ticket, params []Par
 		start, err := j.TimeRange.PopFromTicketQueue(ticket)
 		if err != nil {
 			if err == redis.Nil {
-				lg.Debugf("the queue %s is empty", j.TimeRange.ticketQueue(ticket))
+				lg.Debugf("the queue %s is empty", j.TimeRange.ticketQueueKey(ticket))
 				return nil
 			}
 			return err

@@ -27,6 +27,7 @@ func TestJob_Run(t *testing.T) {
 		Dynamic: &Dynamic{
 			Offset: "1s",
 		},
+		JobUID: "test",
 	})
 	if err != nil {
 		t.Fatal(err)
