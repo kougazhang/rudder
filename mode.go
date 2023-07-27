@@ -10,11 +10,13 @@ import (
 type Mode uint64
 
 const (
-	CronMode Mode = 1 << 0
+	CronMode   Mode = 1 << 0
+	ScriptMode Mode = 1 << 1
 )
 
 var humanMode = map[string]Mode{
-	"cron": CronMode,
+	"cron":   CronMode,
+	"script": ScriptMode,
 }
 
 func (e Mode) String() string {
