@@ -160,9 +160,19 @@ func (t TimeRange) rpopFromStateQueue(ticket Ticket) (TicketParam, error) {
 	return param, nil
 }
 
-// PushToJobQueue push elements to the queue
+type TicketQueueParam struct {
+	// Effective is the start time of the TicketQueueParam
+	// If it was not set, effective from now.
+	Effective time.Time
+	// Expiration is the expiration of the TicketQueueParam
+	Expiration time.Duration
+	// JobStart is the true param
+	JobStart int64
+}
+
+// PushToTicketQueue push elements to the queue
 // the ticket in the job will run the specified starts from the queue
-func (t TimeRange) PushToJobQueue(ticket Ticket, jobStarts ...int64) error {
+func (t TimeRange) PushToTicketQueue(ticket Ticket, params ...TicketQueueParam) error {
 	rds, err := t.addr.NewClient()
 	if err != nil {
 		return err
@@ -171,20 +181,25 @@ func (t TimeRange) PushToJobQueue(ticket Ticket, jobStarts ...int64) error {
 		_ = rds.Close()
 	}()
 
-	values := make([]any, 0, len(jobStarts))
-	for _, jobStart := range jobStarts {
-		values = append(values, jobStart)
+	values := make([]any, 0, len(params))
+	for _, param := range params {
+		data, err := json.Marshal(param)
+		if err != nil {
+			return err
+		}
+		values = append(values, data)
 	}
-	_, err = rds.RPush(t.jobQueue(ticket), values...).Result()
+	log.Debugf("pushToTicketQueue: push to param %v...", values)
+	_, err = rds.RPush(t.ticketQueue(ticket), values...).Result()
 	if err == nil || err == redis.Nil {
 		return nil
 	}
 	return err
 }
 
-// PopFromJobQueue pops elements from the queue
+// PopFromTicketQueue pops elements from the queue
 // the ticket in the job will run the specified starts from the queue
-func (t TimeRange) PopFromJobQueue(ticket Ticket) (int64, error) {
+func (t TimeRange) PopFromTicketQueue(ticket Ticket) (int64, error) {
 	rds, err := t.addr.NewClient()
 	if err != nil {
 		return 0, err
@@ -193,7 +208,58 @@ func (t TimeRange) PopFromJobQueue(ticket Ticket) (int64, error) {
 		_ = rds.Close()
 	}()
 
-	return rds.LPop(t.jobQueue(ticket)).Int64()
+	fetched := make(map[string]struct{}, 0)
+	for {
+		data, err := rds.LPop(t.ticketQueue(ticket)).Bytes()
+		if err != nil {
+			return 0, err
+		}
+		var param TicketQueueParam
+		if err = json.Unmarshal(data, &param); err != nil {
+			return 0, err
+		}
+		log.Debugf("popFromTicketQueue: pop param %v...", param)
+		// use fetched to break dead loop
+		// if hasFetched is true, the loop should be broke.
+		_, hasFetched := fetched[string(data)]
+		if !hasFetched {
+			fetched[string(data)] = struct{}{}
+		}
+		// if now is before or equal Effective, put it back.
+		// if the param is expired, drop it.
+		// in the normal case, return it.
+		now := time.Now()
+		end := param.Effective.Add(param.Expiration)
+		if now.Equal(param.Effective) || now.Before(param.Effective) {
+			// put it back
+			log.Debugf("popFromTicketQueue: put it back param %v...", param)
+			_, err = rds.RPush(t.ticketQueue(ticket), data).Result()
+			if err != nil {
+				return 0, err
+			}
+			if hasFetched {
+				break
+			} else {
+				// try to get the next one
+				continue
+			}
+		}
+		if now.After(end) {
+			// drop it
+			log.Debugf("popFromTicketQueue:drop it param %v...", param)
+			if hasFetched {
+				break
+			} else {
+				// try to get the next one
+				continue
+			}
+		}
+		log.Debugf("popFromTicketQueue:consume param %v...", param)
+		// return it.
+		return param.JobStart, err
+	}
+
+	return 0, nil
 }
 
 // DynamicRace Checks the current time meets the offset of start or not
@@ -309,7 +375,7 @@ func (t TimeRange) CleanRedis(ticket Ticket) error {
 		t.endKey(ticket),
 		t.lockKey(t.startKey(ticket)),
 		t.lockKey(t.endKey(ticket)),
-		t.jobQueue(ticket),
+		t.ticketQueue(ticket),
 	}
 	_, err = rds.Del(keys...).Result()
 	return err
@@ -323,8 +389,8 @@ func (t TimeRange) startKey(ticket Ticket) string {
 	return string("rudder:" + ticket + ":start")
 }
 
-func (t TimeRange) jobQueue(ticket Ticket) string {
-	return string("rudder:" + ticket + ":job_queue")
+func (t TimeRange) ticketQueue(ticket Ticket) string {
+	return string("rudder:" + ticket + ":ticket_queue")
 }
 
 func (t TimeRange) endKey(ticket Ticket) string {

@@ -47,11 +47,11 @@ func TestJob_Run(t *testing.T) {
 		Bucket: map[Ticket][]Param{
 			domain: nil,
 		},
-		Task:      task{},
-		Interval:  time.Second * 5,
-		TimeRange: trange,
-		//IsFixedTime: false,
-		IsFixedTime: true,
+		Task:        task{},
+		Interval:    time.Second * 5,
+		TimeRange:   trange,
+		IsFixedTime: false,
+		//IsFixedTime: true,
 		//Mode:        CronMode,
 	}
 	job.BeforeTaskRun = []TaskRunFn{
@@ -67,13 +67,18 @@ func TestJob_Run(t *testing.T) {
 			return nil
 		},
 	}
-	err = job.TimeRange.PushToJobQueue(domain, time.Now().Add(time.Hour*24).Unix())
+	err = job.TimeRange.PushToTicketQueue(domain, TicketQueueParam{
+		JobStart:   time.Now().Add(time.Hour * 24).Unix(),
+		Effective:  time.Now().Add(time.Second),
+		Expiration: time.Second * 2,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := job.Run(); err != nil {
 		t.Fatal(err)
 	}
+	// note the code to check the redis
 	if err := trange.CleanRedis(domain); err != nil {
 		log.Fatal(err)
 	}

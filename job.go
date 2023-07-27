@@ -126,20 +126,23 @@ func (j Job) run(ctx context.Context) error {
 	return nil
 }
 
-// runTicketFromQueue runs the specified time points
+// runTicketFromQueue runs the specified time points and ticket
 func (j Job) runTicketFromQueue(ctx context.Context, ticket Ticket, params []Param) (err error) {
 	lg := log.WithField("func", "Job.runTicketFromQueue")
 	lg = lg.WithField("ticket", ticket)
 
 	for {
 		// get specified starts from redis
-		start, err := j.TimeRange.PopFromJobQueue(ticket)
+		start, err := j.TimeRange.PopFromTicketQueue(ticket)
 		if err != nil {
 			if err == redis.Nil {
-				lg.Debugf("the queue %s is empty", j.TimeRange.jobQueue(ticket))
+				lg.Debugf("the queue %s is empty", j.TimeRange.ticketQueue(ticket))
 				return nil
 			}
 			return err
+		}
+		if start == 0 {
+			return nil
 		}
 		// run the task
 		ctx = j.setTaskUID(ctx, ticket, start)
