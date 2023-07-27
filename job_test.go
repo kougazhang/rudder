@@ -68,9 +68,9 @@ func TestJob_Run(t *testing.T) {
 		},
 	}
 	err = job.TimeRange.PushToTicketQueue(domain, TicketQueueParam{
-		JobStart:   time.Now().Add(time.Hour * 24).Unix(),
-		Effective:  time.Now().Add(time.Second),
-		Expiration: time.Second * 2,
+		Start:     time.Now().Add(time.Hour * 24).Unix(),
+		Effective: time.Now().Add(time.Second),
+		Duration:  time.Second * 2,
 	})
 	if err != nil {
 		t.Fatal(err)

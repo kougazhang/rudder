@@ -164,10 +164,10 @@ type TicketQueueParam struct {
 	// Effective is the start time of the TicketQueueParam
 	// If it was not set, effective from now.
 	Effective time.Time
-	// Expiration is the expiration of the TicketQueueParam
-	Expiration time.Duration
-	// JobStart is the true param
-	JobStart int64
+	// Duration is the effective duration of the TicketQueueParam
+	Duration time.Duration
+	// Start is the true param
+	Start int64
 }
 
 // PushToTicketQueue push elements to the queue
@@ -229,7 +229,7 @@ func (t TimeRange) PopFromTicketQueue(ticket Ticket) (int64, error) {
 		// if the param is expired, drop it.
 		// in the normal case, return it.
 		now := time.Now()
-		end := param.Effective.Add(param.Expiration)
+		end := param.Effective.Add(param.Duration)
 		if now.Equal(param.Effective) || now.Before(param.Effective) {
 			// put it back
 			log.Debugf("popFromTicketQueue: put it back param %v...", param)
@@ -256,7 +256,7 @@ func (t TimeRange) PopFromTicketQueue(ticket Ticket) (int64, error) {
 		}
 		log.Debugf("popFromTicketQueue:consume param %v...", param)
 		// return it.
-		return param.JobStart, err
+		return param.Start, err
 	}
 
 	return 0, nil
