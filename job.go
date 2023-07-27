@@ -146,7 +146,7 @@ func (j Job) runTicketFromQueue(ctx context.Context, ticket Ticket, params []Par
 		}
 		// run the task
 		ctx = j.setTaskUID(ctx, ticket, start)
-		lg.Debugf("runTicketFromQueue: taskUID %s", ctx.Value(TaskUIDCtx))
+		lg.Infof("runTicketFromQueue: taskUID %s", ctx.Value(TaskUIDCtx))
 		if err := j.Task.Run(ctx, ticket, params, start); err != nil {
 			return err
 		}
@@ -162,6 +162,7 @@ func (j Job) runTicket(ctx context.Context, ticket Ticket, params []Param, jobSt
 		if j.IsFixedTime {
 			start, err = j.fixedTimeStart(ticket)
 			if err != nil {
+				// here is breaking the dead loop  in fix start
 				if err == completedErr {
 					lg.Infof("the job is completed, start %s, stop to run", timeFormat(start))
 					return nil
@@ -171,6 +172,7 @@ func (j Job) runTicket(ctx context.Context, ticket Ticket, params []Param, jobSt
 		} else {
 			start, err = j.dynamicTimeStart(ticket, jobStart)
 			if err != nil {
+				// here is breaking the dead loop in dynamic start
 				if err == timeIsEarlyErr {
 					lg.Infof("the start %s is too early, continue to wait", timeFormat(start))
 					return nil
