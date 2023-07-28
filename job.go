@@ -203,6 +203,8 @@ func (j Job) runTicket(ctx context.Context, ticket Ticket, params []Param, jobSt
 
 // SetState adds the lasting state before task running
 // SetState consumes the existed state of the task
+// If SetState was added to Job.BeforeTaskRun, when the start is too early or job was completed,
+// SetState does not work.
 func (j Job) SetState(ctx context.Context, ticket Ticket, params []Param, jobStart int64) error {
 	// add new data to queue
 	ticketParam := TicketParam{
